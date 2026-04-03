@@ -5,43 +5,42 @@ const sdl3 = @import("sdl3");
 const UserData = struct {
     running: bool = true,
     white: bool = true,
+    x_offset: usize = 0,
+    y_offset: usize = 0,
     window: sdl3.video.Window,
-    bitmap_memory: sdl3.surface.Surface,
 
     const Self = @This();
 
-    const pixels: [16]u8 align(32) = .{
-        0xff, 0xff, 0x0,  0x0,
-        0xff, 0x0,  0xff, 0x0,
-        0xff, 0x0,  0x0,  0xff,
-        0x88, 0xff, 0xff, 0xff,
-    };
-
-    pub fn init(window: sdl3.video.Window) !Self {
-        const bitmap_memory: sdl3.surface.Surface = try .initFrom(
-            2,
-            2,
-            sdl3.pixels.Format.array_abgr_32,
-            &Self.pixels,
-        );
-        return .{
-            .window = window,
-            .bitmap_memory = bitmap_memory,
-        };
-    }
-
-    pub fn deinit(self: Self) void {
-        self.bitmap_memory.deinit();
-    }
-
     pub fn paint(self: Self) !void {
         const surface = try self.window.getSurface();
-        try self.update_window(surface);
+        try self.render_weird_gradient(surface);
         try self.window.updateSurface();
     }
 
-    fn update_window(self: Self, surface: sdl3.surface.Surface) !void {
-        try self.bitmap_memory.stretch(try self.bitmap_memory.getClipRect(), surface, try surface.getClipRect(), .linear);
+    fn render_weird_gradient(self: Self, surface: sdl3.surface.Surface) !void {
+        const width = 255;
+        const height = 255;
+        const bytes_per_pixel = 4;
+        const alignment = 8 * bytes_per_pixel;
+        var pixels: [width * height * bytes_per_pixel]u8 align(alignment) = undefined;
+        for (0..height) |y| {
+            const row = width * y * bytes_per_pixel;
+            for (0..width) |x| {
+                const ptr = row + (x * bytes_per_pixel);
+                const blue = @as(u32, @as(u8, @truncate(x +% self.x_offset)));
+                const green = @as(u32, @as(u8, @truncate(y +% self.y_offset)));
+                std.mem.writeInt(
+                    u32,
+                    pixels[ptr..][0..bytes_per_pixel],
+                    (green << 8) | blue,
+                    .big,
+                );
+            }
+        }
+
+        const bitmap: sdl3.surface.Surface = try .initFrom(width, height, sdl3.pixels.Format.array_xrgb_32, &pixels);
+        defer bitmap.deinit();
+        try bitmap.blitTiled(try bitmap.getClipRect(), surface, null);
     }
 };
 
@@ -75,16 +74,17 @@ pub fn win_main() !void {
     const window = try sdl3.video.Window.init("Handmade Hero", 720, 420, .{ .resizable = true });
     defer window.deinit();
 
-    var user_data: UserData = try .init(window);
-    defer user_data.deinit();
+    var user_data: UserData = .{ .window = window };
     try user_data.paint();
 
     const filter = try sdl3.events.addWatch(UserData, &main_window_callback, &user_data);
     defer sdl3.events.removeWatch(filter, &user_data);
 
-    var capper: sdl3.extras.FramerateCapper(f32) = .{ .mode = .{ .limited = 120 } };
+    const fps = 120;
+    var capper: sdl3.extras.FramerateCapper(f32) = .{ .mode = .{ .limited = fps } };
     while (user_data.running) {
-        _ = capper.delay();
+        _ = capper.delay() * fps;
+        user_data.x_offset = user_data.x_offset -% 1;
         try user_data.paint();
         sdl3.events.pump();
     }
