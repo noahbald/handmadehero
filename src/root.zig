@@ -96,10 +96,10 @@ fn main_window_callback(user_data: ?*UserData, event: *sdl3.events.Event) bool {
             if (user_data) |data| {
                 if (e.key) |key| {
                     switch (key) {
-                        .up => data.y_velocity = -0xff,
-                        .right => data.x_velocity = 0xff,
-                        .down => data.y_velocity = 0xff,
-                        .left => data.x_velocity = -0xff,
+                        .up => data.y_velocity = -0xfff,
+                        .right => data.x_velocity = 0xfff,
+                        .down => data.y_velocity = 0xfff,
+                        .left => data.x_velocity = -0xfff,
                         else => {},
                     }
                 }
@@ -109,7 +109,8 @@ fn main_window_callback(user_data: ?*UserData, event: *sdl3.events.Event) bool {
             if (user_data) |data| {
                 if (e.key) |key| {
                     switch (key) {
-                        .up, .right, .down, .left => data.x_velocity = 0,
+                        .right, .left => data.x_velocity = 0,
+                        .up, .down => data.y_velocity = 0,
                         else => {},
                     }
                 }
@@ -149,12 +150,28 @@ fn main_window_callback(user_data: ?*UserData, event: *sdl3.events.Event) bool {
     return true;
 }
 
+fn main_playback_stream_callback(
+    user_data: ?*UserData,
+    stream: sdl3.audio.Stream,
+    additional_amount: usize,
+    total_amount: usize,
+) void {
+    _ = user_data;
+    _ = total_amount;
+
+    const data = std.heap.page_allocator.alloc(u8, additional_amount) catch return;
+    defer std.heap.page_allocator.free(data);
+
+    @memset(data, 0x80);
+    stream.putData(data) catch return;
+}
+
 pub fn win_main() !void {
     defer sdl3.shutdown();
 
     _ = try sdl3.hints.set(.joystick_hidapi, "0");
 
-    const init: sdl3.InitFlags = .{ .video = true, .gamepad = true, .joystick = true };
+    const init: sdl3.InitFlags = .{ .video = true, .gamepad = true, .joystick = true, .audio = true };
     try sdl3.init(init);
     defer sdl3.quit(init);
     const ids = try sdl3.gamepad.getGamepads();
@@ -162,6 +179,9 @@ pub fn win_main() !void {
     for (ids) |id| {
         _ = try sdl3.gamepad.Gamepad.init(id);
     }
+    const playback_devices = try sdl3.audio.getPlaybackDevices();
+    defer sdl3.free(playback_devices);
+    const playback: sdl3.audio.Device = .{ .value = sdl3.c.SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK };
 
     const window = try sdl3.video.Window.init("Handmade Hero", 720, 420, .{ .resizable = true });
     defer window.deinit();
@@ -171,6 +191,14 @@ pub fn win_main() !void {
 
     const filter = try sdl3.events.addWatch(UserData, &main_window_callback, &user_data);
     defer sdl3.events.removeWatch(filter, &user_data);
+    const stream = try playback.openStream(
+        .{ .format = sdl3.audio.Format.unsigned_8_bit, .num_channels = 2, .sample_rate = 48_000 },
+        UserData,
+        main_playback_stream_callback,
+        &user_data,
+    );
+    try stream.resumeDevice();
+    defer stream.deinit();
 
     const fps = 120;
     var capper: sdl3.extras.FramerateCapper(f32) = .{ .mode = .{ .limited = fps } };
