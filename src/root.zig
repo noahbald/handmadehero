@@ -8,6 +8,8 @@ const COLOUR_BYTES = 4;
 
 const UserData = struct {
     running: bool = true,
+    x_velocity: i16 = 0,
+    y_velocity: i16 = 0,
     x_offset: i32 = 0,
     y_offset: i32 = 0,
     window: sdl3.video.Window,
@@ -90,6 +92,58 @@ fn main_window_callback(user_data: ?*UserData, event: *sdl3.events.Event) bool {
                 data.*.running = false;
             }
         },
+        .key_down => |*e| {
+            if (user_data) |data| {
+                if (e.key) |key| {
+                    switch (key) {
+                        .up => data.y_velocity = -0xff,
+                        .right => data.x_velocity = 0xff,
+                        .down => data.y_velocity = 0xff,
+                        .left => data.x_velocity = -0xff,
+                        else => {},
+                    }
+                }
+            }
+        },
+        .key_up => |*e| {
+            if (user_data) |data| {
+                if (e.key) |key| {
+                    switch (key) {
+                        .up, .right, .down, .left => data.x_velocity = 0,
+                        else => {},
+                    }
+                }
+            }
+        },
+        .gamepad_button_down => |*e| {
+            switch (e.button) {
+                .dpad_up, .dpad_down, .dpad_left, .dpad_right, .start, .back, .left_shoulder, .right_shoulder, .south, .east, .west, .north => {},
+                else => {
+                    if (user_data) |data| {
+                        data.y_velocity = 0xff;
+                    }
+                },
+            }
+        },
+        .gamepad_axis_motion => |*e| {
+            switch (e.axis) {
+                .left_x => if (user_data) |data| {
+                    if (@abs(e.value) > 0xff) {
+                        data.x_velocity = e.value;
+                    } else {
+                        data.x_velocity = 0;
+                    }
+                },
+                .left_y => if (user_data) |data| {
+                    if (@abs(e.value) > 0xff) {
+                        data.y_velocity = e.value;
+                    } else {
+                        data.y_velocity = 0;
+                    }
+                },
+                else => {},
+            }
+        },
         else => {},
     }
     return true;
@@ -98,9 +152,16 @@ fn main_window_callback(user_data: ?*UserData, event: *sdl3.events.Event) bool {
 pub fn win_main() !void {
     defer sdl3.shutdown();
 
-    const init: sdl3.InitFlags = .{ .video = true };
+    _ = try sdl3.hints.set(.joystick_hidapi, "0");
+
+    const init: sdl3.InitFlags = .{ .video = true, .gamepad = true, .joystick = true };
     try sdl3.init(init);
     defer sdl3.quit(init);
+    const ids = try sdl3.gamepad.getGamepads();
+    defer sdl3.free(ids);
+    for (ids) |id| {
+        _ = try sdl3.gamepad.Gamepad.init(id);
+    }
 
     const window = try sdl3.video.Window.init("Handmade Hero", 720, 420, .{ .resizable = true });
     defer window.deinit();
@@ -115,8 +176,8 @@ pub fn win_main() !void {
     var capper: sdl3.extras.FramerateCapper(f32) = .{ .mode = .{ .limited = fps } };
     while (user_data.running) {
         _ = capper.delay() * fps;
-        user_data.x_offset = @mod(user_data.x_offset + 1, 0xff);
-        user_data.y_offset = @mod(user_data.y_offset + 1, 0xff);
+        user_data.x_offset = @mod(user_data.x_offset + @divFloor(user_data.x_velocity, 0xfff), 0xff);
+        user_data.y_offset = @mod(user_data.y_offset + @divFloor(user_data.y_velocity, 0xfff), 0xff);
         try user_data.paint();
         sdl3.events.pump();
     }
