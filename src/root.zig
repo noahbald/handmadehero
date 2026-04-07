@@ -5,6 +5,10 @@ const sdl3 = @import("sdl3");
 const COLOUR_WIDTH = 255;
 const COLOUR_HEIGHT = 255;
 const COLOUR_BYTES = 4;
+const SQUARE_WAVE_SAMPLES = 48_000;
+const SQUARE_WAVE_PERIOD = SQUARE_WAVE_SAMPLES / SQUARE_WAVE_FREQUENCY;
+const SQUARE_WAVE_FREQUENCY = 256;
+const SQUARE_WAVE_AMPLITUDE = 0.05;
 
 const UserData = struct {
     running: bool = true,
@@ -12,6 +16,7 @@ const UserData = struct {
     y_velocity: i16 = 0,
     x_offset: i32 = 0,
     y_offset: i32 = 0,
+    square_wave_counter: usize = 0,
     window: sdl3.video.Window,
     pixels: [COLOUR_WIDTH * COLOUR_HEIGHT * COLOUR_BYTES]u8 align(32) = undefined,
 
@@ -156,14 +161,30 @@ fn main_playback_stream_callback(
     additional_amount: usize,
     total_amount: usize,
 ) void {
-    _ = user_data;
     _ = total_amount;
 
-    const data = std.heap.page_allocator.alloc(u8, additional_amount) catch return;
-    defer std.heap.page_allocator.free(data);
+    const WORDS = 128;
+    var words_remaining = additional_amount / @sizeOf(f32);
+    while (true) {
+        var samples: [WORDS]f32 = @splat(-SQUARE_WAVE_AMPLITUDE);
+        const counter = user_data.?.square_wave_counter;
+        for (&samples, counter..) |*sample, i| {
+            if ((i % SQUARE_WAVE_PERIOD) > (SQUARE_WAVE_PERIOD / 2)) {
+                sample.* = SQUARE_WAVE_AMPLITUDE;
+            }
+        }
+        user_data.?.square_wave_counter += samples.len;
+        user_data.?.square_wave_counter %= SQUARE_WAVE_PERIOD;
 
-    @memset(data, 0x80);
-    stream.putData(data) catch return;
+        const bytes: []u8 = @ptrCast(&samples);
+        stream.putData(bytes) catch return;
+
+        if (words_remaining <= WORDS) {
+            break;
+        } else {
+            words_remaining -= WORDS;
+        }
+    }
 }
 
 pub fn win_main() !void {
@@ -192,7 +213,7 @@ pub fn win_main() !void {
     const filter = try sdl3.events.addWatch(UserData, &main_window_callback, &user_data);
     defer sdl3.events.removeWatch(filter, &user_data);
     const stream = try playback.openStream(
-        .{ .format = sdl3.audio.Format.unsigned_8_bit, .num_channels = 2, .sample_rate = 48_000 },
+        .{ .format = sdl3.audio.Format.floating_32_bit, .num_channels = 1, .sample_rate = SQUARE_WAVE_SAMPLES },
         UserData,
         main_playback_stream_callback,
         &user_data,
